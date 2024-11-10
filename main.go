@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -72,7 +73,12 @@ func fetchAvailableSymbols() ([]SymbolInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch symbols: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			fmt.Printf("failed to close body: %v", err)
+		}
+	}(resp.Body)
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -164,7 +170,12 @@ func subscribeOrderBook(symbol string, db *sql.DB, wg *sync.WaitGroup) {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		defer conn.Close()
+		defer func(conn *websocket.Conn) {
+			err := conn.Close()
+			if err != nil {
+				fmt.Printf("Failed to close WebSocket connection: %v", err)
+			}
+		}(conn)
 
 		go func() {
 			for {
@@ -185,10 +196,14 @@ func subscribeOrderBook(symbol string, db *sql.DB, wg *sync.WaitGroup) {
 				"instId": "%s"
 			}]
 		}`, symbol)
-		fmt.Println(string(subscribeMessage))
+		fmt.Println(subscribeMessage)
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(subscribeMessage)); err != nil {
 			log.Printf("Subscription failed: %v", err)
-			conn.Close()
+			err := conn.Close()
+			if err != nil {
+				fmt.Printf("Failed to close connection: %v", err)
+				return
+			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -197,7 +212,11 @@ func subscribeOrderBook(symbol string, db *sql.DB, wg *sync.WaitGroup) {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("Read error: %v. Reconnecting...", err)
-				conn.Close()
+				err := conn.Close()
+				if err != nil {
+					fmt.Printf("Failed to close connection: %v", err)
+					return
+				}
 				time.Sleep(5 * time.Second)
 				break
 			}
@@ -284,7 +303,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func(db *sql.DB) {
+		err := db.Close()
+		if err != nil {
+			fmt.Printf("Failed to close connection: %v", err)
+		}
+	}(db)
 
 	symbols, err := fetchAvailableSymbols()
 	if err != nil {
